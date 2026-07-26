@@ -41,6 +41,7 @@ from toolkit.sd_device_states_presets import empty_preset
 from toolkit.train_tools import get_torch_dtype, apply_noise_offset
 from einops import rearrange, repeat
 import torch
+import torch.nn.functional as F
 from toolkit.pipelines import CustomStableDiffusionXLPipeline, CustomStableDiffusionPipeline, \
     StableDiffusionKDiffusionXLPipeline, StableDiffusionXLRefinerPipeline, FluxWithCFGPipeline, \
     FluxAdvancedControlPipeline
@@ -630,13 +631,13 @@ class StableDiffusion:
         elif self.model_config.is_flux:
             self.print_and_status_update("Loading Flux model")
             # base_model_path = "black-forest-labs/FLUX.1-schnell"
-            base_model_path = self.model_config.name_or_path_original
+            base_model_path = self.model_config.extras_name_or_path
             self.print_and_status_update("Loading transformer")
             subfolder = 'transformer'
             transformer_path = model_path
             local_files_only = False
             # check if HF_DATASETS_OFFLINE or TRANSFORMERS_OFFLINE is set
-            if os.path.exists(transformer_path):
+            if os.path.isdir(transformer_path):
                 subfolder = None
                 transformer_path = os.path.join(transformer_path, 'transformer')
                 # check if the path is a full checkpoint.
@@ -645,13 +646,28 @@ class StableDiffusion:
                 if os.path.exists(te_folder_path):
                     base_model_path = model_path
 
-            transformer = FluxTransformer2DModel.from_pretrained(
-                transformer_path,
-                subfolder=subfolder,
-                torch_dtype=dtype,
-                # low_cpu_mem_usage=False,
-                # device_map=None
-            )
+            if os.path.isfile(transformer_path):
+                if base_model_path == transformer_path:
+                    raise ValueError(
+                        "Loading a single-file Flux transformer requires "
+                        "model.extras_name_or_path to point at a Diffusers "
+                        "config/repository containing the scheduler, VAE, and "
+                        "text encoders."
+                    )
+                transformer = FluxTransformer2DModel.from_single_file(
+                    transformer_path,
+                    config=base_model_path,
+                    subfolder="transformer",
+                    torch_dtype=dtype,
+                )
+            else:
+                transformer = FluxTransformer2DModel.from_pretrained(
+                    transformer_path,
+                    subfolder=subfolder,
+                    torch_dtype=dtype,
+                    # low_cpu_mem_usage=False,
+                    # device_map=None
+                )
             # hack in model gpu splitter
             if self.model_config.split_model_over_gpus:
                 add_model_gpu_splitter_to_flux(
@@ -3131,8 +3147,121 @@ class StableDiffusion:
         return state_dict
     
     def condition_noisy_latents(self, latents: torch.Tensor, batch:'DataLoaderBatchDTO'):
+        if self.model_config.is_flux_fill:
+            return self._condition_flux_fill_latents(latents, batch)
         # can be overridden in child classes to condition latents before noise prediction
         return latents
+
+    @torch.no_grad()
+    def _condition_flux_fill_latents(
+            self,
+            noisy_latents: torch.Tensor,
+            batch: 'DataLoaderBatchDTO',
+    ) -> torch.Tensor:
+        """
+        Build the FLUX.1 Fill transformer input before FLUX's 2x2 latent packing.
+
+        The returned channels are:
+          noisy target latent (16) + masked-image latent (16) + pixel mask (64)
+
+        The normal FLUX prediction path packs these 96 channels into the 384
+        channels expected by FLUX.1-Fill-dev.
+        """
+        inpaint_tensor = getattr(batch, 'inpaint_tensor', None)
+        target_images = getattr(batch, 'tensor', None)
+
+        if inpaint_tensor is None:
+            raise ValueError(
+                "FLUX.1 Fill training requires an RGBA inpaint image for every "
+                "training image. Set datasets[].inpaint_path; alpha 0 is the "
+                "area to repaint and alpha 1 is the area to preserve."
+            )
+        if target_images is None:
+            raise ValueError(
+                "FLUX.1 Fill needs the uncensored target pixels to encode the "
+                "masked-image condition. Disable latent caching, or set "
+                "load_image_when_caching_latents: true."
+            )
+        if inpaint_tensor.ndim != 4 or inpaint_tensor.shape[1] != 4:
+            raise ValueError(
+                "FLUX.1 Fill inpaint inputs must be RGBA tensors with shape "
+                "[batch, 4, height, width]."
+            )
+
+        expected_in_channels = 384
+        actual_in_channels = getattr(self.unet_unwrapped.config, 'in_channels', None)
+        if actual_in_channels != expected_in_channels:
+            raise ValueError(
+                f"FLUX.1 Fill expects a transformer with {expected_in_channels} "
+                f"input channels, but the loaded model has {actual_in_channels}. "
+                "Use black-forest-labs/FLUX.1-Fill-dev."
+            )
+
+        batch_size, _, latent_height, latent_width = noisy_latents.shape
+        if target_images.shape[0] != batch_size:
+            if batch_size % target_images.shape[0] != 0:
+                raise ValueError("Target image batch does not match the noisy latent batch.")
+            repeats = batch_size // target_images.shape[0]
+            target_images = target_images.repeat(repeats, 1, 1, 1)
+            inpaint_tensor = inpaint_tensor.repeat(repeats, 1, 1, 1)
+
+        pixel_height = latent_height * self.vae_scale_factor
+        pixel_width = latent_width * self.vae_scale_factor
+        if target_images.shape[-2:] != (pixel_height, pixel_width):
+            raise ValueError(
+                "Inpaint conditioning and target images must use the same crop. "
+                f"Expected {(pixel_height, pixel_width)}, got "
+                f"{tuple(target_images.shape[-2:])}."
+            )
+
+        # Dataset alpha semantics are the inverse of Diffusers' mask semantics:
+        # alpha 0 = repaint, alpha 1 = preserve.
+        repaint_mask = 1.0 - inpaint_tensor[:, 3:4]
+        repaint_mask = repaint_mask.to(
+            device=target_images.device,
+            dtype=target_images.dtype,
+        ).clamp(0.0, 1.0)
+        if repaint_mask.shape[-2:] != target_images.shape[-2:]:
+            repaint_mask = F.interpolate(
+                repaint_mask,
+                size=target_images.shape[-2:],
+                mode='bilinear',
+                align_corners=False,
+            )
+
+        # Diffusers' FluxFillPipeline encodes image * (1 - repaint_mask).
+        masked_images = target_images * (1.0 - repaint_mask)
+        masked_image_latents = self.encode_images(
+            list(masked_images),
+            device=noisy_latents.device,
+            dtype=noisy_latents.dtype,
+        )
+
+        if masked_image_latents.shape != noisy_latents.shape:
+            raise ValueError(
+                "Masked-image latents do not match target latents: "
+                f"{tuple(masked_image_latents.shape)} vs "
+                f"{tuple(noisy_latents.shape)}."
+            )
+
+        # FluxFillPipeline preserves all 8x8 pixel-mask values as 64 channels
+        # at latent resolution, then the normal FLUX path performs 2x2 packing.
+        mask = repaint_mask[:, 0].contiguous().view(
+            batch_size,
+            latent_height,
+            self.vae_scale_factor,
+            latent_width,
+            self.vae_scale_factor,
+        )
+        mask = mask.permute(0, 2, 4, 1, 3).reshape(
+            batch_size,
+            self.vae_scale_factor * self.vae_scale_factor,
+            latent_height,
+            latent_width,
+        )
+        mask = mask.to(device=noisy_latents.device, dtype=noisy_latents.dtype)
+
+        return torch.cat((noisy_latents, masked_image_latents, mask), dim=1)
     
     def get_transformer_block_names(self) -> Optional[List[str]]:
         # override in child classes to get transformer block names for lora targeting

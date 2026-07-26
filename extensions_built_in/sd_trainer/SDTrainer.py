@@ -17,6 +17,7 @@ from toolkit.config_modules import GenerateImageConfig
 from toolkit.data_loader import get_dataloader_datasets
 from toolkit.data_transfer_object.data_loader import DataLoaderBatchDTO, FileItemDTO
 from toolkit.guidance import get_targeted_guidance_loss, get_guidance_loss, GuidanceType
+from toolkit.flux_fill_loss import build_flux_fill_loss_multiplier
 from toolkit.image_utils import show_tensors, show_latents
 from toolkit.ip_adapter import IPAdapter
 from toolkit.custom_adapter import CustomAdapter
@@ -1382,7 +1383,20 @@ class SDTrainer(BaseSDTrainProcess):
                         clip_images = batch.clip_image_tensor.to(self.device_torch, dtype=dtype).detach()
 
             mask_multiplier = torch.ones((noisy_latents.shape[0], 1, 1, 1), device=self.device_torch, dtype=dtype)
-            if batch.mask_tensor is not None and self.sd.do_masked_loss:
+            if self.sd.model_config.is_flux_fill:
+                with self.timer('get_flux_fill_loss_multiplier'):
+                    if batch.inpaint_tensor is None:
+                        raise ValueError(
+                            "FLUX.1 Fill requires an RGBA inpaint tensor for "
+                            "conditioning and loss weighting."
+                        )
+                    mask_multiplier = build_flux_fill_loss_multiplier(
+                        batch.inpaint_tensor,
+                        noisy_latents,
+                        repaint_weight=self.train_config.flux_fill_repaint_loss_weight,
+                        preserve_weight=self.train_config.flux_fill_preserve_loss_weight,
+                    )
+            elif batch.mask_tensor is not None and self.sd.do_masked_loss:
                 with self.timer('get_mask_multiplier'):
                     # upsampling no supported for bfloat16
                     mask_multiplier = batch.mask_tensor.to(self.device_torch, dtype=torch.float16).detach()

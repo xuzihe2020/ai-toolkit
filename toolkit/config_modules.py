@@ -500,6 +500,15 @@ class TrainConfig:
         self.correct_pred_norm_multiplier = kwargs.get('correct_pred_norm_multiplier', 1.0)
 
         self.loss_type = kwargs.get('loss_type', 'mse') # mse, mae, wavelet, pixelspace, mean_flow, pseudo_huber
+        # FLUX.1 Fill uses its RGBA conditioning alpha as a weighted loss mask.
+        # A nonzero preserve weight keeps the unmasked region stable while the
+        # larger repaint weight focuses learning on the requested edit.
+        self.flux_fill_repaint_loss_weight = kwargs.get(
+            'flux_fill_repaint_loss_weight', 1.0
+        )
+        self.flux_fill_preserve_loss_weight = kwargs.get(
+            'flux_fill_preserve_loss_weight', 0.1
+        )
         
         # do the loss on a timestep to 0 prediction
         self.t0_loss_target = kwargs.get('t0_loss_target', False)
@@ -589,7 +598,7 @@ class TrainConfig:
         self.max_loss: Optional[float] = kwargs.get("max_loss", None)
 
 
-ModelArch = Literal['sd1', 'sd2', 'sd3', 'sdxl', 'pixart', 'pixart_sigma', 'auraflow', 'flux', 'flex1', 'flex2', 'lumina2', 'vega', 'ssd', 'wan21']
+ModelArch = Literal['sd1', 'sd2', 'sd3', 'sdxl', 'pixart', 'pixart_sigma', 'auraflow', 'flux', 'flux_fill', 'flex1', 'flex2', 'lumina2', 'vega', 'ssd', 'wan21']
 
 
 class ModelConfig:
@@ -604,6 +613,9 @@ class ModelConfig:
         self.is_auraflow: bool = kwargs.get('is_auraflow', False)
         self.is_v3: bool = kwargs.get('is_v3', False)
         self.is_flux: bool = kwargs.get('is_flux', False)
+        self.is_flux_fill: bool = kwargs.get('is_flux_fill', False)
+        if self.is_flux_fill:
+            self.is_flux = True
         self.is_lumina2: bool = kwargs.get('is_lumina2', False)
         if self.is_pixart_sigma:
             self.is_pixart = True
@@ -753,6 +765,9 @@ class ModelConfig:
                 self.is_auraflow = True
             elif self.arch == 'flux':
                 self.is_flux = True
+            elif self.arch == 'flux_fill':
+                self.is_flux = True
+                self.is_flux_fill = True
             elif self.arch == 'lumina2':
                 self.is_lumina2 = True
             elif self.arch == 'vega':
@@ -774,6 +789,8 @@ class ModelConfig:
                 self.arch = 'pixart_sigma'
             elif kwargs.get('is_auraflow', False):
                 self.arch = 'auraflow'
+            elif kwargs.get('is_flux_fill', False):
+                self.arch = 'flux_fill'
             elif kwargs.get('is_flux', False):
                 self.arch = 'flux'
             elif kwargs.get('is_lumina2', False):
