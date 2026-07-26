@@ -500,7 +500,8 @@ class TrainConfig:
         self.correct_pred_norm_multiplier = kwargs.get('correct_pred_norm_multiplier', 1.0)
 
         self.loss_type = kwargs.get('loss_type', 'mse') # mse, mae, wavelet, pixelspace, mean_flow, pseudo_huber
-        # FLUX.1 Fill uses its RGBA conditioning alpha as a weighted loss mask.
+        # FLUX.1 Fill uses its white=repaint conditioning mask as a weighted
+        # loss mask. The loader also accepts legacy variable-alpha RGBA masks.
         # A nonzero preserve weight keeps the unmasked region stable while the
         # larger repaint weight focuses learning on the requested edit.
         self.flux_fill_repaint_loss_weight = kwargs.get(
@@ -956,8 +957,9 @@ class DatasetConfig:
         
         # color for transparent reigon of control images with transparency
         self.control_transparent_color: List[int] = kwargs.get('control_transparent_color', [0, 0, 0])
-        # inpaint images should be webp/png images with alpha channel. The alpha 0 (invisible) section will
-        # be the part conditioned to be inpainted. The alpha 1 (visible) section will be the part that is ignored
+        # Inpaint masks should be PNG/WebP images where white is the inpaint
+        # region and black is preserved. Legacy variable-alpha RGBA images
+        # remain supported (transparent=inpaint, opaque=preserve).
         self.inpaint_path: Union[str,List[str]] = kwargs.get('inpaint_path', None)
         # instead of cropping ot match image, it will serve the full size control image (clip images ie for ip adapters)
         self.full_size_control_images: bool = kwargs.get('full_size_control_images', True)

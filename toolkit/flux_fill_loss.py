@@ -12,11 +12,14 @@ def build_flux_fill_loss_multiplier(
         repaint_weight: float = 1.0,
         preserve_weight: float = 0.1,
 ) -> torch.Tensor:
-    """Build a normalized latent-space loss multiplier from RGBA alpha.
+    """Build a normalized latent-space multiplier from the normalized mask.
 
-    Dataset convention:
+    Internal loader convention:
       alpha 0 = repaint
       alpha 1 = preserve
+
+    Canonical on-disk masks are white=repaint and black=preserve; the dataset
+    loader converts those to this backward-compatible internal RGBA form.
 
     Repaint pixels receive ``repaint_weight`` and preserved pixels receive
     ``preserve_weight``. Each sample is normalized to mean 1 so mask coverage

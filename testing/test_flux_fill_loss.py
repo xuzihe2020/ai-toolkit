@@ -1,11 +1,41 @@
 import unittest
 
 import torch
+from PIL import Image
 
 from toolkit.flux_fill_loss import build_flux_fill_loss_multiplier
+from toolkit.inpaint_mask_utils import normalize_inpaint_mask_image
 
 
 class FluxFillLossTests(unittest.TestCase):
+    def test_white_black_mask_normalizes_to_internal_alpha(self):
+        mask = Image.new("L", (2, 1), 0)
+        mask.putpixel((1, 0), 255)
+
+        normalized = normalize_inpaint_mask_image(mask)
+
+        self.assertEqual("RGBA", normalized.mode)
+        self.assertEqual(255, normalized.getchannel("A").getpixel((0, 0)))
+        self.assertEqual(0, normalized.getchannel("A").getpixel((1, 0)))
+
+    def test_legacy_variable_alpha_mask_remains_supported(self):
+        mask = Image.new("RGBA", (2, 1), (10, 20, 30, 255))
+        mask.putpixel((1, 0), (10, 20, 30, 0))
+
+        normalized = normalize_inpaint_mask_image(mask)
+
+        alpha = normalized.getchannel("A")
+        self.assertEqual([255, 0], [alpha.getpixel((x, 0)) for x in range(2)])
+
+    def test_opaque_rgba_white_black_mask_uses_rgb_values(self):
+        mask = Image.new("RGBA", (2, 1), (0, 0, 0, 255))
+        mask.putpixel((1, 0), (255, 255, 255, 255))
+
+        normalized = normalize_inpaint_mask_image(mask)
+
+        alpha = normalized.getchannel("A")
+        self.assertEqual([255, 0], [alpha.getpixel((x, 0)) for x in range(2)])
+
     def test_alpha_drives_normalized_repaint_weighting(self):
         rgba = torch.zeros((1, 4, 2, 2), dtype=torch.float32)
         rgba[:, 3] = torch.tensor([[0.0, 1.0], [0.0, 1.0]])

@@ -3172,9 +3172,9 @@ class StableDiffusion:
 
         if inpaint_tensor is None:
             raise ValueError(
-                "FLUX.1 Fill training requires an RGBA inpaint image for every "
-                "training image. Set datasets[].inpaint_path; alpha 0 is the "
-                "area to repaint and alpha 1 is the area to preserve."
+                "FLUX.1 Fill training requires a mask for every training "
+                "image. Set datasets[].inpaint_path; white is repaint and "
+                "black is preserve."
             )
         if target_images is None:
             raise ValueError(
@@ -3184,8 +3184,8 @@ class StableDiffusion:
             )
         if inpaint_tensor.ndim != 4 or inpaint_tensor.shape[1] != 4:
             raise ValueError(
-                "FLUX.1 Fill inpaint inputs must be RGBA tensors with shape "
-                "[batch, 4, height, width]."
+                "FLUX.1 Fill received a mask that was not normalized to the "
+                "internal RGBA tensor shape [batch, 4, height, width]."
             )
 
         expected_in_channels = 384
@@ -3214,8 +3214,8 @@ class StableDiffusion:
                 f"{tuple(target_images.shape[-2:])}."
             )
 
-        # Dataset alpha semantics are the inverse of Diffusers' mask semantics:
-        # alpha 0 = repaint, alpha 1 = preserve.
+        # The loader converts canonical white=repaint masks into the legacy
+        # internal alpha representation. Diffusers expects 1=repaint.
         repaint_mask = 1.0 - inpaint_tensor[:, 3:4]
         repaint_mask = repaint_mask.to(
             device=target_images.device,

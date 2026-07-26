@@ -1387,7 +1387,7 @@ class SDTrainer(BaseSDTrainProcess):
                 with self.timer('get_flux_fill_loss_multiplier'):
                     if batch.inpaint_tensor is None:
                         raise ValueError(
-                            "FLUX.1 Fill requires an RGBA inpaint tensor for "
+                            "FLUX.1 Fill requires an inpaint mask tensor for "
                             "conditioning and loss weighting."
                         )
                     mask_multiplier = build_flux_fill_loss_multiplier(

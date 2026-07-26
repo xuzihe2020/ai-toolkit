@@ -23,6 +23,7 @@ from toolkit.config_modules import ControlTypes
 from toolkit.control_generator import ControlGenerator
 from toolkit.metadata import get_meta_for_safetensors
 from toolkit.models.pixtral_vision import PixtralVisionImagePreprocessorCompatible
+from toolkit.inpaint_mask_utils import normalize_inpaint_mask_image
 from toolkit.prompt_utils import inject_trigger_into_prompt
 from torchvision import transforms
 from PIL import Image, ImageFilter, ImageOps
@@ -902,12 +903,13 @@ class InpaintControlFileItemDTOMixin:
                 
     def load_inpaint_image(self: 'FileItemDTO'):
         try:
-            # image must have alpha channel for inpaint
             img = Image.open(self.inpaint_path)
-            # make sure has aplha
-            if img.mode != 'RGBA':
-                return
             img = exif_transpose(img)
+            # Canonical files are ordinary masks: white=repaint,
+            # black=preserve. Legacy variable-alpha RGBA files remain
+            # supported. Both normalize to the historic internal RGBA
+            # representation expected by existing inpaint consumers.
+            img = normalize_inpaint_mask_image(img)
         
             w, h = img.size
             if w > h and self.scale_to_width < self.scale_to_height:
