@@ -158,6 +158,10 @@ class Flux2Pipeline(DiffusionPipeline):
         if not isinstance(prompt, list):
             prompt = [prompt]
 
+        if hasattr(self.text_encoder, "encode_prompts"):
+            prompt_embeds = self.text_encoder.encode_prompts(prompt, device=device)
+            return prompt_embeds, None
+
         all_input_ids = []
         all_attention_masks = []
 

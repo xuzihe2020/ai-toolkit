@@ -6,6 +6,7 @@ from toolkit.config_modules import ModelConfig
 from toolkit.memory_management.manager import MemoryManager
 from toolkit.basic import flush
 from .src.model import Klein9BParams, Klein4BParams
+from .comfy_text_encoder import LocalComfyQwen3Encoder
 
 
 class Flux2KleinModel(Flux2Model):
@@ -35,14 +36,33 @@ class Flux2KleinModel(Flux2Model):
         self.use_old_lokr_format = False
 
     def load_te(self):
-        if self.flux2_klein_te_path is None:
-            raise ValueError("flux2_klein_te_path must be set for Flux2KleinModel")
+        text_encoder_path = (
+            self.model_config.te_name_or_path or self.flux2_klein_te_path
+        )
+        strict_local = self.model_config.model_kwargs.get(
+            "strict_local_models", False
+        )
+        if text_encoder_path is None:
+            raise ValueError("A FLUX.2 Klein text encoder path must be set")
         dtype = self.torch_dtype
         self.print_and_status_update("Loading Qwen3")
 
+        if strict_local:
+            comfyui_path = self.model_config.model_kwargs.get("comfyui_path")
+            if not comfyui_path:
+                raise ValueError(
+                    "model.model_kwargs.comfyui_path is required when "
+                    "strict_local_models is enabled"
+                )
+            text_encoder = LocalComfyQwen3Encoder(
+                text_encoder_path, comfyui_path, dtype=dtype
+            )
+            # The Comfy checkpoint is already mixed-FP8; never quantize it a
+            # second time with optimum.quanto.
+            return text_encoder, None
+
         text_encoder: Qwen3ForCausalLM = Qwen3ForCausalLM.from_pretrained(
-            self.flux2_klein_te_path,
-            torch_dtype=dtype,
+            text_encoder_path, torch_dtype=dtype
         )
         if self.model_config.quantize_te:
             self.print_and_status_update("Quantizing Qwen3")
@@ -63,7 +83,7 @@ class Flux2KleinModel(Flux2Model):
                 offload_percent=self.model_config.layer_offloading_text_encoder_percent,
             )
 
-        tokenizer = Qwen2Tokenizer.from_pretrained(self.flux2_klein_te_path)
+        tokenizer = Qwen2Tokenizer.from_pretrained(text_encoder_path)
         return text_encoder, tokenizer
 
 

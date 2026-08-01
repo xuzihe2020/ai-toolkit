@@ -126,6 +126,9 @@ class Flux2Model(BaseModel):
 
     def load_model(self):
         dtype = self.torch_dtype
+        strict_local = self.model_config.model_kwargs.get(
+            "strict_local_models", False
+        )
         self.print_and_status_update("Loading Flux2 model")
         # will be updated if we detect a existing checkpoint in training folder
         model_path = self.model_config.name_or_path
@@ -140,6 +143,11 @@ class Flux2Model(BaseModel):
             transformer_path = os.path.join(transformer_path, self.flux2_te_filename)
 
         if not os.path.exists(transformer_path):
+            if strict_local:
+                raise FileNotFoundError(
+                    "Strict local model mode forbids downloading the FLUX.2 "
+                    f"transformer; missing path: {transformer_path}"
+                )
             # assume it is from the hub
             transformer_path = huggingface_hub.hf_hub_download(
                 repo_id=model_path,
@@ -193,6 +201,11 @@ class Flux2Model(BaseModel):
             vae_path = self.flux2_vae_path
 
         if vae_path is None or not os.path.exists(vae_path):
+            if strict_local:
+                raise FileNotFoundError(
+                    "Strict local model mode forbids downloading the FLUX.2 "
+                    f"VAE; missing path: {vae_path}"
+                )
             vae_filename = FLUX2_VAE_FILENAME
             if vae_path is not None:
                 # see if it is a filename for huggingface hub

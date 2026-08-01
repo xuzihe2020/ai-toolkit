@@ -37,6 +37,8 @@ class FakeTextEncoder(torch.nn.Module):
 
 def _detach_and_cpu(te: torch.nn.Module):
     MemoryManager.detach(te)
+    if hasattr(te, "unload"):
+        te.unload()
     # bypass any nopped-out .to() override and force an actual CPU move
     torch.nn.Module.to(te, 'cpu')
 

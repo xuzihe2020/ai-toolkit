@@ -1,2 +1,5 @@
 -r requirements_base.txt
 scipy==1.12.0
+# FLUX.2 Klein local text-encoder loading reuses the sibling ComfyUI loader.
+comfy-kitchen==0.2.10
+comfy-aimdo==0.4.10
